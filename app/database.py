@@ -1,5 +1,5 @@
-from motor.motor_asyncio import AsyncIOMotorClient
-from pymongo import ASCENDING, MongoClient
+from motor.motor_asyncio import AsyncIOMotorClient 
+from pymongo import ASCENDING, MongoClient , DESCENDING
 import os
 from dotenv import load_dotenv
 
@@ -33,6 +33,31 @@ def connect_to_mongo():
     database[collection_name].create_index(
             [("employee_id", ASCENDING)], unique=True
         )
+    database[collection_name].create_index(
+        [("department", ASCENDING)], 
+        name="department_index"
+    )
+    
+    # Create compound index for department + joining_date queries
+    database[collection_name].create_index(
+        [("department", ASCENDING), ("joining_date", DESCENDING)], 
+        name="dept_join_date_compound"
+    )
+    
+    # Create text index for skill searching
+    database[collection_name].create_index(
+        [("skills", "text")], 
+        name="skills_text_search"
+    )
+    
+    # Create index on name for sorting
+    database[collection_name].create_index(
+        [("name", ASCENDING)], 
+        name="name_sort_index"
+    )
+        
+    print("✅ All indexes created successfully")
+        
     print("✅ Connected to MongoDB successfully!")
     return database
 
@@ -49,7 +74,7 @@ def get_database():
     return database
 
 def get_collection():
-    """Get employees collection"""
+    """Get employees database[collection_name]"""
     db = get_database()
     if db is None:
         raise RuntimeError("Database connection not established. get_database() returned None.")

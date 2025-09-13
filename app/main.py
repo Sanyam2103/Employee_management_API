@@ -1,15 +1,19 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, status, Depends
+from fastapi.security import OAuth2PasswordRequestForm
 from typing import List, Optional
-from app.models import Employee, EmployeeUpdate, EmployeeResponse, MessageResponse, DepartmentAvgSalary
+from datetime import datetime, timedelta
+from app.models import Employee, EmployeeUpdate, EmployeeResponse, MessageResponse, DepartmentAvgSalary, UserCreate, User, Token
 from app.database import get_collection, connect_to_mongo, close_connection
-from datetime import datetime
+from auth.user_service import create_user, authenticate_user, create_default_admin
+from auth.auth_handler import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
+from auth.dependencies import get_current_user, get_admin_user
 from pymongo.errors import DuplicateKeyError
 import os
 
 # Create FastAPI app
 app = FastAPI(
     title="Employee Management API",
-    description="A REST API for managing employees with MongoDB",
+    description="A REST API for managing employees with MongoDB and JWT authentication",
     version="1.0.0"
 )
 
@@ -18,6 +22,7 @@ async def startup_event():
     """Initialize database connection on startup"""
     try:
         connect_to_mongo()
+        create_default_admin()
         print("🚀 Employee Management API started successfully!")
     except Exception as e:
         print(f"❌ Startup failed: {e}")
@@ -34,7 +39,11 @@ def root():
     return {
         "message": "Employee Management API is running!",
         "docs": "/docs",
+        "auth_required": "Use /auth/login to get access token",
         "endpoints": {
+            "register": "POST /auth/register",
+            "login": "POST /auth/login",
+            "me": "GET /auth/me",
             "create": "POST /employees",
             "get": "GET /employees/{employee_id}",
             "update": "PUT /employees/{employee_id}",
@@ -46,9 +55,67 @@ def root():
         }
     }
 
+# AUTH ROUTES
+@app.post("/auth/register", response_model=MessageResponse)
+def register_user(user_data: UserCreate):
+    """
+    Register a new user (admin only)
+    
+    - **username**: Unique username for the account
+    - **password**: Strong password
+    - **email**: User email address
+    """
+    try:
+        user = create_user(user_data)
+        return MessageResponse(message=f"User '{user['username']}' created successfully")
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+@app.post("/auth/login", response_model=Token)
+def login_user(form_data: OAuth2PasswordRequestForm = Depends()):
+    """
+    Authenticate user and return access token
+    
+    - **username**: Registered username
+    - **password**: Corresponding password
+    """
+    user = authenticate_user(form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user["username"], "role": user["role"]},
+        expires_delta=access_token_expires
+    )
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    }
+
+@app.get("/auth/me", response_model=User)
+def get_current_user_info(current_user: dict = Depends(get_current_user)):
+    """
+    Get current authenticated user info
+    
+    Returns user details like username, email, role
+    """
+    return User(
+        username=current_user["username"],
+        email=current_user["email"],
+        role=current_user["role"],
+        is_active=current_user["is_active"],
+        created_at=current_user["created_at"]
+    )
+
+# EMPLOYEE ROUTES
 # 1. CREATE EMPLOYEE
 @app.post("/employees", response_model=MessageResponse, status_code=201)
-def create_employee(employee: Employee):
+def create_employee(employee: Employee, current_user: dict = Depends(get_admin_user)):
     """
     Create a new employee record
     
@@ -87,7 +154,7 @@ def create_employee(employee: Employee):
 
 # 6. AVERAGE SALARY BY DEPARTMENT
 @app.get("/employees/avg-salary", response_model=List[DepartmentAvgSalary])
-def get_average_salary_by_department():
+def get_average_salary_by_department(current_user: dict = Depends(get_current_user)):
     """
     Get average salary by department using MongoDB aggregation
     
@@ -130,7 +197,7 @@ def get_average_salary_by_department():
 
 # 7. SEARCH EMPLOYEES BY SKILL
 @app.get("/employees/search", response_model=List[str])
-def search_employees_by_skill(skill: str = Query(..., description="Skill to search for")):
+def search_employees_by_skill(skill: str = Query(..., description="Skill to search for"), current_user: dict = Depends(get_current_user)):
     """
     Search employees who have the specified skill
     
@@ -154,8 +221,6 @@ def search_employees_by_skill(skill: str = Query(..., description="Skill to sear
         # Extract the name from each document
         names = [doc["name"] for doc in docs]
         
-        
-        
         print(f"🎯 Found {len(names)} employees with skill '{skill}'")
         return names
         
@@ -166,11 +231,11 @@ def search_employees_by_skill(skill: str = Query(..., description="Skill to sear
 
 # 2. GET EMPLOYEE BY ID
 @app.get("/employees/{employee_id}", response_model=EmployeeResponse)
-def get_employee(employee_id: str):
+def get_employee(employee_id: str, current_user: dict = Depends(get_current_user)):
     """
     Fetch employee details by employee_id
     
-    Returns 404 if employee not foundx
+    Returns 404 if employee not found
     """
     try:
         collection = get_collection()
@@ -201,7 +266,7 @@ def get_employee(employee_id: str):
 
 # 3. UPDATE EMPLOYEE
 @app.put("/employees/{employee_id}", response_model=MessageResponse)
-def update_employee(employee_id: str, employee_update: EmployeeUpdate):
+def update_employee(employee_id: str, employee_update: EmployeeUpdate, current_user: dict = Depends(get_admin_user)):
     """
     Update employee details (partial updates allowed)
     
@@ -251,7 +316,7 @@ def update_employee(employee_id: str, employee_update: EmployeeUpdate):
 
 # 4. DELETE EMPLOYEE
 @app.delete("/employees/{employee_id}", response_model=MessageResponse)
-def delete_employee(employee_id: str):
+def delete_employee(employee_id: str, current_user: dict = Depends(get_admin_user)):
     """
     Delete employee record
     
@@ -284,7 +349,8 @@ def delete_employee(employee_id: str):
 def list_employees(
     department: Optional[str] = Query(None, description="Filter by department"),
     page: int = Query(1, ge=1, description="Page number"),
-    limit: int = Query(10, ge=1, le=100, description="Items per page")
+    limit: int = Query(10, ge=1, le=100, description="Items per page"),
+    current_user: dict = Depends(get_current_user)
 ):
     """
     List employees with optional department filter and pagination

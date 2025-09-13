@@ -1,6 +1,6 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional
-from datetime import date
+from datetime import date,datetime
 
 class Employee(BaseModel):
     """Employee model for creating new employees"""
@@ -49,3 +49,35 @@ class DepartmentAvgSalary(BaseModel):
     """Model for department average salary"""
     department: str
     avg_salary: float
+
+
+class UserCreate(BaseModel):
+    """Model for user registration"""
+    username: str = Field(..., min_length=3, max_length=50)
+    email: EmailStr
+    password: str = Field(..., min_length=6)
+    role: str = Field(default="user", pattern="^(admin|user)$")
+
+class UserLogin(BaseModel):
+    """Model for user login"""
+    username: str
+    password: str
+
+class Token(BaseModel):
+    """JWT token response model"""
+    access_token: str
+    token_type: str
+    expires_in: int
+
+class TokenData(BaseModel):
+    """Data extracted from JWT token"""
+    username: Optional[str] = None
+    role: Optional[str] = None
+
+class User(BaseModel):
+    """User response model"""
+    username: str
+    email: str
+    role: str
+    is_active: bool = True
+    created_at: datetime
