@@ -1,4 +1,4 @@
-echo "# Employee Management API
+# Employee Management API
 
 A FastAPI-based employee management system with JWT authentication and MongoDB.
 
